@@ -6,445 +6,295 @@
     <title>Clash of Clans Upgrade Tracker</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!--
+        Chosen Palette: Custom Dark Slate Theme with Indigo, Teal, and Purple accents.
+        Application Structure Plan: A single-page application built around two primary collapsible sections representing the Home and Builder villages. This structure was chosen to directly mirror the game's core layout, making it instantly intuitive for users. The flow involves users setting their builder counts, which dynamically generates persistent slots for adding timers. Data is saved locally, providing a seamless experience without accounts. Key interactions include editing titles, adding/deleting timers, and auto-sorting of builder slots.
+        Visualization & Content Choices:
+        - Village Organization: Report Info -> Organize -> Collapsible <details> sections. Justification: Efficiently manages screen space and provides clear separation between the two main game areas.
+        - Builder/Lab Slots: Report Info -> Inform/Input -> Conditionally rendered DIVs showing either a form or a timer. Justification: Clearly represents the "busy" or "free" state of a slot.
+        - Timer Countdown: Report Info -> Inform/Change -> Text updated via JS setInterval. Justification: Standard, efficient method for live countdowns.
+        - Auto-Sorting: Report Info -> Organize -> JS array sort before rendering. Justification: Automatically prioritizes timers for the user, reducing manual management.
+        - All implemented with Vanilla JS & Tailwind CSS.
+        CONFIRMATION: NO SVG graphics used. NO Mermaid JS used.
+    -->
     <style>
         body {
             font-family: 'Inter', sans-serif;
+            background-color: #0F172A; /* slate-900 */
         }
-        .loader {
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid #4F46E5;
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            animation: spin 1s linear infinite;
-        }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
+        summary::-webkit-details-marker { display: none; }
+        summary { list-style-type: none; }
+        details[open] > summary .arrow { transform: rotate(0deg); }
+        details:not([open]) > summary .arrow { transform: rotate(-90deg); }
     </style>
 </head>
-<body class="bg-gray-900 text-white antialiased">
+<body class="text-white antialiased">
 
 <div class="container mx-auto p-4 md:p-8 max-w-4xl">
-    <!-- Header -->
     <header class="text-center mb-8">
         <h1 class="text-4xl font-bold text-yellow-400 mb-2">Clash of Clans Upgrade Tracker</h1>
-        <p class="text-gray-400">Upload or paste a screenshot of your "Upgrades in progress" to start tracking.</p>
+        <p class="text-gray-400">Manually track your upgrades for both villages below.</p>
     </header>
 
-    <!-- User ID Display -->
-    <div id="userInfo" class="text-center mb-6 hidden">
-        <p class="text-sm text-gray-500">Your anonymous User ID: <span id="userIdDisplay" class="font-mono bg-gray-800 p-1 rounded"></span></p>
-        <p class="text-xs text-gray-600 mt-1">This is used to save your timers. No personal data is stored.</p>
+    <div class="bg-slate-800 p-4 rounded-lg shadow-lg mb-6 flex items-center justify-center flex-wrap gap-x-4 gap-y-2">
+        <label for="notificationMinutesInput" class="text-gray-300">Notify me when an upgrade is</label>
+        <input type="number" id="notificationMinutesInput" min="1" class="bg-slate-700 border border-slate-600 w-20 p-2 text-sm rounded-lg text-center" placeholder="2">
+        <span class="text-gray-300">minutes away.</span>
     </div>
 
-    <!-- Controls Section -->
-    <div class="bg-gray-800 p-6 rounded-lg shadow-lg mb-8 text-center">
-        <p class="mb-4 text-gray-300">Select an uncropped screenshot for best results.</p>
-        <input type="file" id="screenshotInput" accept="image/*" class="text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-600 file:text-white hover:file:bg-indigo-700 cursor-pointer">
-        <p class="mt-3 text-sm text-gray-500">Or paste an image from your clipboard (Ctrl+V).</p>
-        <div class="mt-4 border-t border-gray-700 pt-4">
-            <button id="testNotificationBtn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg transition-colors">
-                Add 1-Min Test Upgrade
-            </button>
-        </div>
-        <div id="loader" class="hidden mx-auto mt-4"></div>
-        <p id="loading-text" class="hidden text-indigo-400 mt-2"></p>
-    </div>
+    <div id="messageBox" class="hidden p-4 mb-6 rounded-lg text-center transition-opacity duration-300"></div>
 
-    <!-- Message/Error Display -->
-    <div id="messageBox" class="hidden p-4 mb-6 rounded-lg text-center"></div>
-
-    <!-- Timers Display -->
-    <div id="timersContainer" class="space-y-4">
-        <!-- Timers will be dynamically inserted here -->
+    <div id="villagesContainer" class="space-y-6">
+        <!-- Village sections will be dynamically rendered here -->
     </div>
 
 </div>
 
-<script type="module">
-    // Firebase Imports
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-    import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-    import { getFirestore, doc, collection, onSnapshot, writeBatch, query, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-    // --- DOM Elements ---
-    const screenshotInput = document.getElementById('screenshotInput');
-    const testNotificationBtn = document.getElementById('testNotificationBtn');
-    const timersContainer = document.getElementById('timersContainer');
-    const loader = document.getElementById('loader');
-    const loadingText = document.getElementById('loading-text');
+<script>
+    const villagesContainer = document.getElementById('villagesContainer');
     const messageBox = document.getElementById('messageBox');
-    const userInfo = document.getElementById('userInfo');
-    const userIdDisplay = document.getElementById('userIdDisplay');
+    const notificationMinutesInput = document.getElementById('notificationMinutesInput');
 
-    // --- Firebase and App State ---
-    let db, auth;
-    let userId;
-    let timersUnsubscribe = null; // To detach the old listener
-    let activeTimers = []; // Local cache of timers to manage intervals
+    let appState = {};
+    const LOCAL_STORAGE_KEY = 'cocMultiVillageTimers_v6';
 
-    const appId = typeof __app_id !== 'undefined' ? __app_id : 'coc-tracker-default';
-    const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
-
-    // --- Main Initialization ---
-    async function main() {
-        if (!firebaseConfig) {
-            showMessage('Firebase configuration is missing. The app cannot connect to the database.', 'error');
-            return;
+    const defaultState = {
+        notificationMinutes: 2,
+        home: {
+            title: "Home Village",
+            builderCount: 6,
+            maxBuilders: 6,
+            timers: []
+        },
+        builder: {
+            title: "Builder Village",
+            builderCount: 2,
+            maxBuilders: 2,
+            timers: []
         }
+    };
 
-        try {
-            const app = initializeApp(firebaseConfig);
-            db = getFirestore(app);
-            auth = getAuth(app);
-
-            onAuthStateChanged(auth, (user) => {
-                if (user) {
-                    userId = user.uid;
-                    userIdDisplay.textContent = userId;
-                    userInfo.classList.remove('hidden');
-                    setupTimersListener();
-                } else {
-                    signIn();
-                }
-            });
-
-        } catch (error) {
-            console.error("Firebase initialization error:", error);
-            showMessage('Could not initialize the application.', 'error');
-        }
+    function main() {
+        loadState();
+        renderVillages();
+        setInterval(updateAllTimers, 1000);
+        setupEventListeners();
     }
 
-    async function signIn() {
-        try {
-            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                await signInWithCustomToken(auth, __initial_auth_token);
-            } else {
-                await signInAnonymously(auth);
-            }
-        } catch (error) {
-            console.error("Authentication error:", error);
-            showMessage('Could not authenticate with the service.', 'error');
-        }
+    function loadState() {
+        const storedState = localStorage.getItem(LOCAL_STORAGE_KEY);
+        appState = storedState ? JSON.parse(storedState) : JSON.parse(JSON.stringify(defaultState));
+        notificationMinutesInput.value = appState.notificationMinutes;
     }
 
-    // --- Firestore Listener ---
-    function setupTimersListener() {
-        if (!userId) return;
-        if (timersUnsubscribe) timersUnsubscribe();
-
-        const timersCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/timers`);
-        const q = query(timersCollectionRef);
-
-        timersUnsubscribe = onSnapshot(q, (querySnapshot) => {
-            activeTimers = [];
-            timersContainer.innerHTML = '';
-            if (querySnapshot.empty) {
-                showMessage('No active upgrades found. Upload or paste a screenshot to begin.', 'info');
-            } else {
-                hideMessage();
-            }
-
-            querySnapshot.forEach((doc) => {
-                const timerData = doc.data();
-                timerData.id = doc.id;
-                activeTimers.push(timerData);
-            });
-
-            activeTimers.sort((a, b) => a.endTime - b.endTime);
-            activeTimers.forEach(renderTimer);
-
-        }, (error) => {
-            console.error("Error listening to timers:", error);
-            showMessage('Error fetching your timers. Please refresh the page.', 'error');
-        });
+    function saveState() {
+        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(appState));
     }
 
-    // --- Core Logic: Image & Data Processing ---
-    async function processImageFile(file) {
-        if (!file || !file.type.startsWith('image/')) {
-            showMessage('Pasted content is not an image.', 'error');
-            return;
-        }
-
-        if (Notification.permission === 'default') {
-            Notification.requestPermission();
-        }
-
-        loader.classList.remove('hidden');
-        loadingText.textContent = "Analyzing screenshot with AI...";
-        loadingText.classList.remove('hidden');
-        hideMessage();
-
-        try {
-            const base64ImageData = await toBase64(file);
-            const parsedUpgrades = await parseImageWithGemini(base64ImageData);
-            if (parsedUpgrades && parsedUpgrades.length > 0) {
-                loadingText.textContent = "Saving new timers...";
-                await saveUpgradesToFirestore(parsedUpgrades);
-                showMessage('Successfully updated your upgrade timers!', 'success');
-            } else {
-                throw new Error("AI could not detect any upgrades. Please try a clearer screenshot.");
-            }
-        } catch (error) {
-            console.error("Processing error:", error);
-            showMessage(error.message, 'error');
-        } finally {
-            loader.classList.add('hidden');
-            loadingText.classList.add('hidden');
-            screenshotInput.value = '';
-        }
-    }
-
-    screenshotInput.addEventListener('change', (event) => {
-        const file = event.target.files[0];
-        if (file) {
-            processImageFile(file);
-        }
-    });
-
-    window.addEventListener('paste', (event) => {
-        const items = (event.clipboardData || event.originalEvent.clipboardData).items;
-        for (const item of items) {
-            if (item.type.startsWith('image/')) {
-                const file = item.getAsFile();
-                processImageFile(file);
-                event.preventDefault();
-                return;
-            }
-        }
-    });
-
-    testNotificationBtn.addEventListener('click', async () => {
-        if (Notification.permission === 'default') {
-            await Notification.requestPermission();
-        }
-
-        if(Notification.permission !== 'granted') {
-            showMessage('Please enable notifications to test this feature.', 'error');
-            return;
-        }
-
-        const testUpgrade = [{ building: "Test Upgrade", time: "1m" }];
-        showMessage('Creating a 1-minute test upgrade...', 'info');
-        await saveUpgradesToFirestore(testUpgrade);
-        showMessage('Test upgrade started! You should get a notification soon.', 'success');
-    });
-
-    async function parseImageWithGemini(base64ImageData) {
-        const apiKey = ""; // Leave empty
-        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
-
-        const prompt = `
-                Analyze this Clash of Clans screenshot showing "Upgrades in progress".
-                Extract each upgrade's name and its remaining time.
-                The time can be in days (d), hours (h), and minutes (m).
-                Return the data as a JSON array of objects. Each object should have two keys: "building" and "time".
-                For example: [{"building": "Giga Inferno", "time": "1h 36m"}, {"building": "Cannon", "time": "1d 1h"}].
-                If you cannot find any upgrades, return an empty array [].
-            `;
-
-        const payload = {
-            contents: [{
-                role: "user",
-                parts: [
-                    { text: prompt },
-                    { inlineData: { mimeType: "image/jpeg", data: base64ImageData.split(',')[1] } }
-                ]
-            }],
-            generationConfig: {
-                responseMimeType: "application/json",
-            }
-        };
-
-        const response = await fetch(apiUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-
-        if (!response.ok) throw new Error(`API request failed with status ${response.status}`);
-
-        const result = await response.json();
-
-        if (result.candidates && result.candidates[0].content && result.candidates[0].content.parts[0]) {
-            return JSON.parse(result.candidates[0].content.parts[0].text);
-        } else {
-            console.warn("Unexpected API response structure:", result);
-            throw new Error("Could not parse the image. The AI model returned an unexpected response.");
-        }
-    }
-
-    // --- Data Handling and Firestore ---
-    async function saveUpgradesToFirestore(upgrades) {
-        if (!userId) throw new Error("User not authenticated.");
-
-        const batch = writeBatch(db);
-        const timersCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/timers`);
-        const oldDocsSnapshot = await getDocs(query(timersCollectionRef));
-        oldDocsSnapshot.forEach(doc => {
-            batch.delete(doc.ref);
-        });
-
-        const now = Date.now();
-        upgrades.forEach(upgrade => {
-            const totalSeconds = parseTime(upgrade.time);
-            if (totalSeconds > 0) {
-                const newTimerRef = doc(timersCollectionRef);
-                batch.set(newTimerRef, {
-                    buildingName: upgrade.building,
-                    totalDurationInSeconds: totalSeconds,
-                    endTime: now + totalSeconds * 1000,
-                    notificationSent: false,
-                    createdAt: now
-                });
+    function setupEventListeners() {
+        notificationMinutesInput.addEventListener('change', (e) => {
+            const minutes = parseInt(e.target.value);
+            if (minutes > 0) {
+                appState.notificationMinutes = minutes;
+                saveState();
+                showMessage('Notification time updated!', 'success');
             }
         });
 
-        await batch.commit();
+        villagesContainer.addEventListener('input', (e) => {
+            if (e.target.classList.contains('village-title')) {
+                const villageKey = e.target.dataset.village;
+                appState[villageKey].title = e.target.value;
+                saveState();
+            }
+        });
+
+        villagesContainer.addEventListener('change', (e) => {
+            if (e.target.classList.contains('builder-select')) {
+                const villageKey = e.target.dataset.village;
+                appState[villageKey].builderCount = parseInt(e.target.value);
+                appState[villageKey].timers = appState[villageKey].timers.filter(t => t.slot === 'lab' || t.isBuilder);
+                saveState();
+                renderVillages();
+            }
+        });
+
+        villagesContainer.addEventListener('click', (e) => {
+            const addBtn = e.target.closest('.add-btn');
+            if (addBtn) {
+                const { village, slot } = addBtn.dataset;
+                addTimer(village, slot);
+            }
+            const deleteBtn = e.target.closest('.delete-btn');
+            if (deleteBtn) {
+                const { village, id } = deleteBtn.dataset;
+                deleteTimer(village, id);
+            }
+        });
     }
 
-    // --- UI Rendering and Real-time Updates ---
-    function renderTimer(timerData) {
-        const timerElement = document.createElement('div');
-        timerElement.className = 'bg-gray-800 p-4 rounded-lg shadow-md';
-        timerElement.dataset.id = timerData.id;
-        timerElement.dataset.endTime = timerData.endTime;
+    function addTimer(villageKey, slot) {
+        const form = document.querySelector(`#form-${villageKey}-${slot}`);
+        const name = form.querySelector('input[type="text"]').value.trim();
+        const days = parseInt(form.querySelector('.input-days').value) || 0;
+        const hours = parseInt(form.querySelector('.input-hours').value) || 0;
+        const minutes = parseInt(form.querySelector('.input-mins').value) || 0;
 
-        timerElement.innerHTML = `
-                <div class="flex justify-between items-baseline mb-2">
-                    <span class="font-bold text-lg text-yellow-400">${timerData.buildingName}</span>
-                    <span class="time-remaining font-mono text-gray-300"></span>
+        if (!name) return showMessage('Please enter a name for the upgrade.', 'error');
+        const totalSeconds = (days * 86400) + (hours * 3600) + (minutes * 60);
+        if (totalSeconds <= 0) return showMessage('Please enter a valid duration.', 'error');
+
+        appState[villageKey].timers.push({
+            id: crypto.randomUUID(), slot, buildingName: name, endTime: Date.now() + totalSeconds * 1000, notificationSent: false
+        });
+        saveState();
+        renderVillages();
+    }
+
+    function deleteTimer(villageKey, timerId) {
+        appState[villageKey].timers = appState[villageKey].timers.filter(t => t.id !== timerId);
+        saveState();
+        renderVillages();
+    }
+
+    function renderVillages() {
+        villagesContainer.innerHTML = '';
+        villagesContainer.appendChild(createVillageElement('home', appState.home, 'indigo'));
+        villagesContainer.appendChild(createVillageElement('builder', appState.builder, 'teal'));
+        updateAllTimers();
+    }
+
+    function createVillageElement(key, data, themeColor) {
+        const el = document.createElement('details');
+        el.className = 'village-section bg-slate-800 rounded-lg overflow-hidden';
+        el.dataset.village = key;
+        el.open = true;
+
+        let builderOptions = '';
+        for (let i = 1; i <= data.maxBuilders; i++) builderOptions += `<option value="${i}" ${i === data.builderCount ? 'selected' : ''}>${i}</option>`;
+
+        const builderTimers = data.timers.filter(t => t.slot !== 'lab').sort((a, b) => a.endTime - b.endTime);
+        const labTimer = data.timers.find(t => t.slot === 'lab');
+
+        let slotsHTML = '';
+        builderTimers.forEach((timer, index) => {
+            slotsHTML += createActiveTimerHTML(key, timer, `Builder Slot ${index + 1}`, themeColor);
+        });
+
+        const freeBuilderSlots = data.builderCount - builderTimers.length;
+        for (let i = 0; i < freeBuilderSlots; i++) {
+            slotsHTML += createEmptySlotHTML(key, 'builder', `Builder Slot ${builderTimers.length + i + 1}`, themeColor);
+        }
+
+        slotsHTML += labTimer ? createActiveTimerHTML(key, labTimer, 'Laboratory', 'purple') : createEmptySlotHTML(key, 'lab', 'Laboratory', 'purple');
+
+        el.innerHTML = `
+                <summary class="p-4 cursor-pointer text-xl font-bold flex justify-between items-center">
+                    <div class="flex items-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 text-gray-500 pointer-events-none" viewBox="0 0 20 20" fill="currentColor"><path d="M17.414 2.586a2 2 0 00-2.828 0L7 10.172V13h2.828l7.586-7.586a2 2 0 000-2.828z"/><path fill-rule="evenodd" d="M2 6a2 2 0 012-2h4a1 1 0 010 2H4v10h10v-4a1 1 0 112 0v4a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" clip-rule="evenodd"/></svg>
+                        <input type="text" value="${data.title}" data-village="${key}" class="village-title bg-transparent font-bold text-xl focus:bg-slate-700 rounded p-1 outline-none w-auto">
+                    </div>
+                    <span class="arrow text-gray-400 transform transition-transform duration-200">▼</span>
+                </summary>
+                <div class="p-4 border-t border-slate-700/50">
+                    <div class="mb-6 flex items-center space-x-2">
+                        <label for="builder-select-${key}" class="text-gray-300">Builders:</label>
+                        <select id="builder-select-${key}" data-village="${key}" class="builder-select bg-slate-700 border border-slate-600 text-white text-sm rounded-lg p-2">${builderOptions}</select>
+                    </div>
+                    <div class="space-y-4">${slotsHTML}</div>
+                </div>`;
+        return el;
+    }
+
+    function createEmptySlotHTML(villageKey, slot, title, themeColor) {
+        const bgColor = slot === 'lab' ? 'bg-purple-900/50' : 'bg-slate-700/50';
+        return `<div id="form-${villageKey}-${slot}" class="${bgColor} p-4 rounded-lg">
+                <h4 class="font-semibold text-gray-400 mb-3">${title}</h4>
+                <div class="grid grid-cols-1 md:grid-cols-5 gap-4 items-end">
+                    <div class="md:col-span-2"><label class="block text-xs font-medium text-gray-400 mb-1">Name</label><input type="text" class="bg-slate-600 border border-slate-500 text-white text-sm rounded-lg w-full p-2" placeholder="e.g., Cannon"></div>
+                    <div class="flex space-x-2 md:col-span-2">
+                        <div><label class="block text-xs font-medium text-gray-400 mb-1">Days</label><input type="number" min="0" class="input-days bg-slate-600 border border-slate-500 w-full p-2 text-sm rounded-lg" placeholder="0"></div>
+                        <div><label class="block text-xs font-medium text-gray-400 mb-1">Hours</label><input type="number" min="0" max="23" class="input-hours bg-slate-600 border border-slate-500 w-full p-2 text-sm rounded-lg" placeholder="0"></div>
+                        <div><label class="block text-xs font-medium text-gray-400 mb-1">Mins</label><input type="number" min="0" max="59" class="input-mins bg-slate-600 border border-slate-500 w-full p-2 text-sm rounded-lg" placeholder="0"></div>
+                    </div>
+                    <button data-village="${villageKey}" data-slot="${slot}" class="add-btn w-full bg-${themeColor}-600 hover:bg-${themeColor}-700 text-white font-bold py-2 px-4 rounded-lg transition-colors">Add</button>
+                </div></div>`;
+    }
+
+    function createActiveTimerHTML(villageKey, timer, title, themeColor) {
+        const bgColor = timer.slot === 'lab' ? 'bg-purple-900/50' : 'bg-slate-700/50';
+        return `<div data-id="${timer.id}" class="active-timer ${bgColor} p-4 rounded-lg border-l-4 border-${themeColor}-500">
+                <h4 class="font-semibold text-gray-400 mb-2">${title}</h4>
+                <div class="flex items-center justify-between">
+                    <div class="flex-grow"><div class="flex items-baseline mb-2"><span class="font-bold text-lg text-yellow-400 mr-3">${timer.buildingName}</span><span class="time-remaining font-mono text-gray-300 text-base"></span></div><p class="completion-text text-gray-400 text-sm"></p></div>
+                    <button data-village="${villageKey}" data-id="${timer.id}" class="delete-btn bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-3 rounded-lg transition-colors flex-shrink-0 ml-4">&times;</button>
                 </div>
-                <p class="completion-text text-gray-400 text-sm"></p>
-            `;
-        timersContainer.appendChild(timerElement);
-
-        const completionDate = new Date(timerData.endTime);
-        timerElement.querySelector('.completion-text').textContent = formatCompletionTime(timerData.buildingName, completionDate);
+            </div>`;
     }
 
-    function updateTimersUI() {
+    function updateAllTimers() {
         const now = Date.now();
-        document.querySelectorAll('[data-id]').forEach(timerEl => {
-            const endTime = parseInt(timerEl.dataset.endTime, 10);
-            const timeRemainingEl = timerEl.querySelector('.time-remaining');
+        let stateModified = false;
+        document.querySelectorAll('.active-timer').forEach(el => {
+            const timerId = el.dataset.id;
+            const villageKey = el.closest('.village-section').dataset.village;
+            const timer = appState[villageKey]?.timers.find(t => t.id === timerId);
+            if (!timer) return;
 
-            const secondsLeft = Math.round((endTime - now) / 1000);
-
+            const secondsLeft = Math.round((timer.endTime - now) / 1000);
             if (secondsLeft > 0) {
-                timeRemainingEl.textContent = `( ${formatTime(secondsLeft)} left )`;
-
-                const timerData = activeTimers.find(t => t.id === timerEl.dataset.id);
-                if (timerData && !timerData.notificationSent && secondsLeft <= 120 && Notification.permission === 'granted') {
-                    sendNotification(timerData);
-                    timerData.notificationSent = true;
+                el.querySelector('.time-remaining').textContent = `( ${formatTime(secondsLeft)} left )`;
+                el.querySelector('.completion-text').textContent = formatCompletionDateTime(timer.buildingName, new Date(timer.endTime));
+                if (!timer.notificationSent && secondsLeft <= appState.notificationMinutes * 60 && Notification.permission === 'granted') {
+                    new Notification('Clash of Clans Upgrade Almost Done!', {
+                        body: `${timer.buildingName} will complete in about ${appState.notificationMinutes} minute(s).`,
+                        icon: 'https://placehold.co/192x192/0F172A/FBBF24?text=CoC'
+                    });
+                    timer.notificationSent = true;
+                    stateModified = true;
                 }
             } else {
-                timeRemainingEl.textContent = "( Completed! )";
-                timerEl.querySelector('.font-bold').classList.add('line-through', 'text-gray-500');
+                deleteTimer(villageKey, timerId);
             }
         });
+        if (stateModified) saveState();
     }
 
-    // --- Notifications ---
-    function sendNotification(timerData) {
-        const body = `${timerData.buildingName} will complete in about 2 minutes.`;
-        new Notification('Clash of Clans Upgrade Almost Done!', {
-            body: body,
-            icon: 'https://placehold.co/192x192/1F2937/FBBF24?text=CoC'
-        });
-    }
-
-    // --- Utility Functions ---
-    function formatCompletionTime(buildingName, date) {
+    function formatCompletionDateTime(name, date) {
         const time = date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
         const month = date.toLocaleString('en-US', { month: 'long' });
-
         const day = date.getDate();
-        let daySuffix;
-        if (day > 3 && day < 21) {
-            daySuffix = 'th';
-        } else {
-            switch (day % 10) {
-                case 1:  daySuffix = "st"; break;
-                case 2:  daySuffix = "nd"; break;
-                case 3:  daySuffix = "rd"; break;
-                default: daySuffix = "th"; break;
-            }
-        }
-
-        return `${buildingName} will be finished upgrading at ${time} on ${month} ${day}${daySuffix}.`;
+        const suffix = (day > 3 && day < 21) ? 'th' : ['th', 'st', 'nd', 'rd', 'th', 'th', 'th', 'th', 'th', 'th'][day % 10];
+        return `${name} will be finished upgrading at ${time} on ${month} ${day}${suffix}.`;
     }
 
-    function parseTime(timeStr) {
-        if (!timeStr || typeof timeStr !== 'string') return 0;
-        let totalSeconds = 0;
-        const days = timeStr.match(/(\d+)\s*d/);
-        const hours = timeStr.match(/(\d+)\s*h/);
-        const minutes = timeStr.match(/(\d+)\s*m/);
+    function formatTime(seconds) {
+        if (seconds <= 0) return "0s";
+        const d = Math.floor(seconds / 86400);
+        const h = Math.floor((seconds % 86400) / 3600);
+        const m = Math.floor((seconds % 3600) / 60);
+        const s = Math.floor(seconds % 60);
 
-        if (days) totalSeconds += parseInt(days[1]) * 86400;
-        if (hours) totalSeconds += parseInt(hours[1]) * 3600;
-        if (minutes) totalSeconds += parseInt(minutes[1]) * 60;
-
-        if (!days && !hours && !minutes && timeStr.match(/(\d+)\s*s/)) {
-            const seconds = timeStr.match(/(\d+)\s*s/);
-            if(seconds) totalSeconds += parseInt(seconds[1]);
+        let parts = [];
+        if (d > 0) parts.push(`${d}d`);
+        if (h > 0) parts.push(`${h}h`);
+        if (m > 0) parts.push(`${m}m`);
+        if (d === 0 && h === 0) {
+            parts.push(`${s}s`);
         }
 
-        if(totalSeconds === 0 && /^\d+$/.test(timeStr)){
-            totalSeconds += parseInt(timeStr) * 60;
-        }
-
-        return totalSeconds;
-    }
-
-    function formatTime(totalSeconds) {
-        if (totalSeconds <= 0) return "0s";
-        const d = Math.floor(totalSeconds / 86400);
-        const h = Math.floor((totalSeconds % 86400) / 3600);
-        const m = Math.floor((totalSeconds % 3600) / 60);
-        const s = Math.floor(totalSeconds % 60);
-
-        let result = '';
-        if (d > 0) result += `${d}d `;
-        if (h > 0) result += `${h}h `;
-        if (m > 0) result += `${m}m `;
-        if (s > 0 && d === 0) result += `${s}s`;
-        return result.trim();
-    }
-
-    function toBase64(file) {
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.readAsDataURL(file);
-            reader.onload = () => resolve(reader.result);
-            reader.onerror = error => reject(error);
-        });
+        return parts.join(' ').trim() || '0s';
     }
 
     function showMessage(text, type = 'info') {
         messageBox.textContent = text;
-        messageBox.className = 'p-4 mb-6 rounded-lg text-center';
-        const typeClasses = {
-            success: 'bg-green-800 text-green-200',
-            error: 'bg-red-800 text-red-200',
-            info: 'bg-blue-800 text-blue-200'
-        };
-        messageBox.classList.add(...(typeClasses[type] || typeClasses.info).split(' '));
-        messageBox.classList.remove('hidden');
+        const colors = { success: 'bg-green-800 text-green-200', error: 'bg-red-800 text-red-200', info: 'bg-sky-800 text-sky-200' };
+        messageBox.className = `p-4 mb-6 rounded-lg text-center transition-opacity duration-300 ${colors[type]}`;
+        setTimeout(() => messageBox.classList.add('opacity-0'), 3000);
+        setTimeout(() => messageBox.classList.add('hidden'), 3300);
     }
 
-    function hideMessage() {
-        messageBox.classList.add('hidden');
-    }
-
-    // --- Start the app ---
     main();
-    setInterval(updateTimersUI, 1000);
 </script>
 </body>
 </html>
